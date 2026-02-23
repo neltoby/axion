@@ -1,6 +1,6 @@
 # Axion School Management System API
 
-This repository implements the backend technical challenge on top of the Axion manager/middleware architecture, with full REST aliases, RBAC, Redis persistence, and security hardening.
+This repository implements the backend technical challenge on top of the Axion manager/middleware architecture, with full REST aliases, RBAC, Redis persistence, security hardening, Node 22 Docker packaging, and health probe endpoints.
 
 ## PDF Criteria Coverage
 
@@ -13,14 +13,24 @@ This repository implements the backend technical challenge on top of the Axion m
 - Rate limiting.
 - `nodemon` development workflow.
 - Test suite with automated coverage for RBAC, auth lifecycle, security, routing, and uniqueness constraints.
+- Docker packaging using Node 22.
+
+## Recent Updates
+
+- Added production Docker packaging (`Dockerfile`) using Node 22.
+- Added health probe routes: `GET /health` and `GET /healthz`.
+- Added health payload tests and dependency-down behavior (`503` when cache check fails).
+- Removed unused legacy files/dependencies to keep the codebase leaner.
 
 ## High-Level Architecture
 
 ```mermaid
 flowchart LR
   Client["Client (Postman/Web)"] --> Server["UserServer (Express)"]
+  Server --> Health["Health probes (/health, /healthz)"]
   Server --> Rest["REST aliases (/api/v1/...)"]
   Server --> Dynamic["Dynamic API (/api/:moduleName/:fnName)"]
+  Health --> Resp["ResponseDispatcher"]
   Rest --> Api["ApiHandler"]
   Dynamic --> Api
   Api --> Stack["VirtualStack (__device, __rateLimit, method mws)"]
@@ -28,18 +38,20 @@ flowchart LR
   Managers --> Store["DataStore (Redis docs + indexes)"]
   Managers --> Authz["Authorization Manager (RBAC policy cache + Redis policy docs)"]
   Managers --> Token["Token Manager (JWT access/refresh)"]
-  Api --> Resp["ResponseDispatcher"]
+  Api --> Resp
   Resp --> Client
 ```
 
 ## Request Flow
 
-1. Request enters `UserServer.manager` through a REST alias (always enabled) and optionally dynamic route (when enabled).
-2. REST alias maps to `moduleName` + `fnName` and forwards to `Api.manager`.
-3. `Api.manager` resolves handler and builds middleware stack from method signature `__` params.
-4. `VirtualStack.manager` runs pre-stack middleware (`__device`, `__rateLimit`) plus handler middleware (`__auth`, `__authorize`, etc).
-5. Target manager method executes business logic.
-6. `ResponseDispatcher.manager` returns normalized response:
+1. Request enters `UserServer.manager`.
+2. If path is `/health` or `/healthz`, server responds directly with app/cache probe payload (no auth needed).
+3. Otherwise request goes through REST alias (always enabled) and optionally dynamic route (when enabled).
+4. REST alias maps to `moduleName` + `fnName` and forwards to `Api.manager`.
+5. `Api.manager` resolves handler and builds middleware stack from method signature `__` params.
+6. `VirtualStack.manager` runs pre-stack middleware (`__device`, `__rateLimit`) plus handler middleware (`__auth`, `__authorize`, etc).
+7. Target manager method executes business logic.
+8. `ResponseDispatcher.manager` returns normalized response:
    - `{ ok, data, errors, message }`
 
 ## Managers in Scope
@@ -218,7 +230,7 @@ Startup validation is centralized in `config/index.config.js`:
 
 Prerequisites:
 
-- Node.js 18+
+- Node.js 22+ (recommended)
 - Redis
 
 Commands:
@@ -232,7 +244,31 @@ npm test         # node --test tests/**/*.test.js
 
 Default server port: `5111`.
 
+## Docker (Node 22)
+
+Build image:
+
+```bash
+docker build -t axion:node22 .
+```
+
+Run container:
+
+```bash
+docker run --rm -p 5111:5111 --env-file .env axion:node22
+```
+
+Health probes:
+
+- `GET /health`
+- `GET /healthz`
+
 ## Routing Model
+
+Health routes:
+
+- `GET /health`
+- `GET /healthz`
 
 REST aliases (primary):
 
@@ -285,6 +321,41 @@ Auth header options:
 
 - `Authorization: Bearer <token>`
 - `token: <token>`
+
+### Health
+
+- `GET /health`
+- `GET /healthz`
+- no auth required
+- response status:
+  - `200` when app and cache checks pass
+  - `503` when dependency check fails (for example Redis/cache unavailable)
+
+Response shape example:
+
+```json
+{
+  "ok": true,
+  "data": {
+    "service": "school-system",
+    "env": "development",
+    "timestamp": "2026-02-23T00:00:00.000Z",
+    "uptimeSec": 123,
+    "checks": {
+      "app": "up",
+      "cache": "up"
+    }
+  },
+  "errors": [],
+  "message": ""
+}
+```
+
+Why two health endpoints?
+
+- `/health` is the canonical endpoint used by most teams and external monitors.
+- `/healthz` is a compatibility alias used by many orchestration/platform defaults.
+- Both return the same payload so any tool expecting either path works without extra config.
 
 ### Auth and Users
 
@@ -394,7 +465,7 @@ Auth header options:
 - `423`: account temporarily locked (login hardening)
 - `429`: rate limit exceeded
 - `500`: unexpected internal error
-- `503`: rate limiter unavailable when fail-open is disabled
+- `503`: service dependency unavailable (health probe failure) or rate limiter unavailable when fail-open is disabled
 
 ## Test Coverage
 
@@ -415,8 +486,9 @@ Current test files include:
 - token lifecycle (refresh/logout/revocation)
 - school cascade delete + rollback behavior
 - uniqueness constraints for school/classroom/student
+- health payload behavior (up/down scenarios)
 
-Latest local run: `57 passed, 0 failed`.
+Latest local run: `59 passed, 0 failed`.
 
 ## Deployment Notes
 
@@ -426,4 +498,5 @@ Latest local run: `57 passed, 0 failed`.
    - `npm install`
    - `npm run start`
 4. Put behind a reverse proxy/load balancer in production.
-5. Ensure `CORS_ORIGINS` is set for production unless intentionally using `CORS_ALLOW_ALL=true`.
+5. Configure platform/container probes to use either `GET /health` or `GET /healthz`.
+6. Ensure `CORS_ORIGINS` is set for production unless intentionally using `CORS_ALLOW_ALL=true`.

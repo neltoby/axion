@@ -352,6 +352,71 @@ module.exports = class UserServer {
 		return routes;
 	}
 
+	async _checkCacheHealth() {
+		const existsFn =
+			this.managers?.dataStore?.cache?.key &&
+			this.managers.dataStore.cache.key.exists;
+
+		if (typeof existsFn !== 'function') {
+			return {
+				ok: true,
+				status: 'skipped',
+			};
+		}
+
+		try {
+			await existsFn.call(this.managers.dataStore.cache.key, {
+				key: '__health__:cache',
+			});
+			return {
+				ok: true,
+				status: 'up',
+			};
+		} catch (err) {
+			return {
+				ok: false,
+				status: 'down',
+				message: err?.message || 'cache unavailable',
+			};
+		}
+	}
+
+	async _buildHealthPayload() {
+		const cacheHealth = await this._checkCacheHealth();
+		const ok = cacheHealth.ok;
+
+		const payload = {
+			ok,
+			code: ok ? 200 : 503,
+			data: {
+				service: this.config.dotEnv.SERVICE_NAME,
+				env: this.config.dotEnv.ENV,
+				timestamp: new Date().toISOString(),
+				uptimeSec: Math.floor(process.uptime()),
+				checks: {
+					app: 'up',
+					cache: cacheHealth.status,
+				},
+			},
+		};
+
+		if (!ok) {
+			payload.message = cacheHealth.message;
+		}
+
+		return payload;
+	}
+
+	_bindHealthRoutes() {
+		const handler = async (req, res) => {
+			const payload = await this._buildHealthPayload();
+			return this._dispatch(res, payload);
+		};
+
+		app.get('/health', handler);
+		app.get('/healthz', handler);
+	}
+
 	_bindRestRoutes() {
 		const call = ({ moduleName, fnName, route }) => {
 			return (req, res, next) => {
@@ -385,13 +450,15 @@ module.exports = class UserServer {
 		app.set('trust proxy', 1);
 		app.disable('x-powered-by');
 		app.use(cors(this._buildCorsOptions()));
-        app.use(express.json({ limit: '1mb' }));
-        app.use(express.urlencoded({ extended: true, limit: '1mb' }));
-        app.use(this._sanitizeRequestPayloadMw());
-        app.use(this._securityHeadersMw());
-        
-        /** REST-style aliases that map to the template dynamic handler */
-        this._bindRestRoutes();
+		app.use(express.json({ limit: '1mb' }));
+		app.use(express.urlencoded({ extended: true, limit: '1mb' }));
+		app.use(this._sanitizeRequestPayloadMw());
+		app.use(this._securityHeadersMw());
+
+		this._bindHealthRoutes();
+
+		/** REST-style aliases that map to the template dynamic handler */
+		this._bindRestRoutes();
 
 		/** template dynamic middleware to handle all modules/functions */
 		if (this._isTrue(this.config.dotEnv.ENABLE_DYNAMIC_API)) {
