@@ -20,8 +20,6 @@ module.exports = class ApiHandler {
 		this.prop = prop;
 		this.exposed = {};
 		this.methodMatrix = {};
-		this.auth = {};
-		this.fileUpload = {};
 		this.mwsStack = {};
 		this.mw = this.mw.bind(this);
 

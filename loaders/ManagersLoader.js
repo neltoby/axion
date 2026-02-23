@@ -1,12 +1,8 @@
 const MiddlewaresLoader = require('./MiddlewaresLoader');
 const ApiHandler = require('../managers/api/Api.manager');
-const LiveDB = require('../managers/live_db/LiveDb.manager');
 const UserServer = require('../managers/http/UserServer.manager');
 const ResponseDispatcher = require('../managers/response_dispatcher/ResponseDispatcher.manager');
 const VirtualStack = require('../managers/virtual_stack/VirtualStack.manager');
-const ValidatorsLoader = require('./ValidatorsLoader');
-const ResourceMeshLoader = require('./ResourceMeshLoader');
-const utils = require('../libs/utils');
 
 const TokenManager = require('../managers/token/Token.manager');
 const DataStore = require('../managers/data_store/DataStore.manager');
@@ -28,32 +24,16 @@ module.exports = class ManagersLoader {
 		this.cache = cache;
 		this.cortex = cortex;
 
-		this._preload();
 		this.injectable = {
-			utils,
 			cache,
 			config,
 			cortex,
 			managers: this.managers,
-			validators: this.validators,
-			resourceNodes: this.resourceNodes,
 		};
-	}
-
-	_preload() {
-		const validatorsLoader = new ValidatorsLoader({
-			models: require('../managers/_common/schema.models'),
-			customValidators: require('../managers/_common/schema.validators'),
-		});
-		const resourceMeshLoader = new ResourceMeshLoader({});
-
-		this.validators = validatorsLoader.load();
-		this.resourceNodes = resourceMeshLoader.load();
 	}
 
 	load() {
 		this.managers.responseDispatcher = new ResponseDispatcher();
-		this.managers.liveDb = new LiveDB(this.injectable);
 		const middlewaresLoader = new MiddlewaresLoader(this.injectable);
 		const mwsRepo = middlewaresLoader.load();
 		this.injectable.mwsRepo = mwsRepo;

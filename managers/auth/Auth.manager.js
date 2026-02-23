@@ -252,10 +252,6 @@ module.exports = class AuthManager {
     return users.filter((user) => user.role === ROLES.SUPERADMIN).length;
   }
 
-  _isSuperadmin(actor) {
-    return Boolean(actor && actor.role === ROLES.SUPERADMIN);
-  }
-
   isSchoolAdmin(actor) {
     return Boolean(actor && actor.role === ROLES.SCHOOL_ADMIN);
   }
@@ -268,15 +264,7 @@ module.exports = class AuthManager {
     });
   }
 
-  async canAccessSchool({ actor, schoolId, action = ACL_ACTIONS.READ }) {
-    return await this._authorization().canAccessSchool({
-      actor,
-      schoolId,
-      action,
-    });
-  }
-
-  async canAccessClassroom({ actor, schoolId, classroomId, action = ACL_ACTIONS.READ }) {
+  async canAccessClassroom({ actor, schoolId, action = ACL_ACTIONS.READ }) {
     return await this._authorization().canAccessClassroom({
       actor,
       schoolId,
@@ -284,20 +272,12 @@ module.exports = class AuthManager {
     });
   }
 
-  async canAccessStudent({ actor, schoolId, studentId, action = ACL_ACTIONS.READ }) {
+  async canAccessStudent({ actor, schoolId, action = ACL_ACTIONS.READ }) {
     return await this._authorization().canAccessStudent({
       actor,
       schoolId,
       action,
     });
-  }
-
-  async grantSchoolAdminAccess() {
-    return true;
-  }
-
-  async revokeSchoolAdminAccess() {
-    return true;
   }
 
   async ensureAuthenticatedActor({ __auth }) {
