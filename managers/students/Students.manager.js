@@ -26,6 +26,43 @@ module.exports = class StudentsManager {
       'post=v1_transferStudent',
       'delete=v1_deleteStudent',
     ];
+
+    this.restExposed = [
+      {
+        method: 'post',
+        path: '/api/v1/students',
+        fnName: 'v1_enrollStudent',
+      },
+      {
+        method: 'get',
+        path: '/api/v1/students',
+        fnName: 'v1_listStudents',
+      },
+      {
+        method: 'get',
+        path: '/api/v1/students/:studentId',
+        fnName: 'v1_getStudent',
+        queryFromParams: ['studentId'],
+      },
+      {
+        method: 'patch',
+        path: '/api/v1/students/:studentId',
+        fnName: 'v1_updateStudent',
+        bodyFromParams: ['studentId'],
+      },
+      {
+        method: 'delete',
+        path: '/api/v1/students/:studentId',
+        fnName: 'v1_deleteStudent',
+        bodyFromParams: ['studentId'],
+      },
+      {
+        method: 'post',
+        path: '/api/v1/students/:studentId/transfer',
+        fnName: 'v1_transferStudent',
+        bodyFromParams: ['studentId'],
+      },
+    ];
   }
 
   _auth() {
@@ -111,12 +148,16 @@ module.exports = class StudentsManager {
     return { ok: true };
   }
 
-  async _findStudentByEmailInSchool({ schoolId, email }) {
+  async _findStudentByEmailInSchool({ schoolId, email, excludingStudentId = null }) {
     const normalizedEmail = lower(email);
     const ids = await this._dataStore().listStudentIdsBySchool({ schoolId });
     const students = await this._dataStore().listDocs({ collection: 'students', ids });
 
-    return students.find((student) => student.email === normalizedEmail) || null;
+    return (
+      students.find(
+        (student) => student.email === normalizedEmail && student._id !== excludingStudentId
+      ) || null
+    );
   }
 
   async v1_enrollStudent({ __auth, __authorize, schoolId, classroomId, firstName, lastName, email, age }) {
@@ -427,6 +468,15 @@ module.exports = class StudentsManager {
     const destinationSchool = await this._ensureSchoolExists(destinationSchoolId);
     if (!destinationSchool) {
       return { error: 'target school not found' };
+    }
+
+    const duplicateEmail = await this._findStudentByEmailInSchool({
+      schoolId: destinationSchoolId,
+      email: student.email,
+      excludingStudentId: student._id,
+    });
+    if (duplicateEmail) {
+      return { error: 'student email already exists in school' };
     }
 
     if (targetClassroomId) {

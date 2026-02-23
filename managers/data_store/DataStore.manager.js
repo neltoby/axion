@@ -30,6 +30,22 @@ module.exports = class DataStore {
     return `${this.keyspace}:meta:authorization:policyVersion`;
   }
 
+  _revokedAccessTokenKey(jti) {
+    return `${this.keyspace}:security:tokens:revoked:${jti}`;
+  }
+
+  _loginFailuresKey(email) {
+    return `${this.keyspace}:security:login:failures:${email}`;
+  }
+
+  _loginLockKey(email) {
+    return `${this.keyspace}:security:login:lock:${email}`;
+  }
+
+  _refreshSessionKey(tokenId) {
+    return `${this.keyspace}:security:refresh:${tokenId}`;
+  }
+
   _safeParse(raw) {
     if (!raw || raw === 'null') {
       return null;
@@ -266,5 +282,166 @@ module.exports = class DataStore {
     });
 
     return version || null;
+  }
+
+  async revokeAccessToken({ jti, expiresAtSec, ttlSec }) {
+    if (!jti) {
+      return false;
+    }
+
+    const nowSec = Math.floor(Date.now() / 1000);
+    const computedTtl = Number(ttlSec) > 0
+      ? Number(ttlSec)
+      : Math.max(60, Number(expiresAtSec || nowSec) - nowSec + 60);
+
+    return this.cache.key.set({
+      key: this._revokedAccessTokenKey(jti),
+      data: '1',
+      ttl: computedTtl,
+    });
+  }
+
+  async isAccessTokenRevoked({ jti }) {
+    if (!jti) {
+      return false;
+    }
+
+    return this.cache.key.exists({
+      key: this._revokedAccessTokenKey(jti),
+    });
+  }
+
+  async registerLoginFailure({ email, windowSec = 900 }) {
+    if (!email) {
+      return 0;
+    }
+
+    const key = this._loginFailuresKey(email);
+    const count = await this.cache.hash.incrby({
+      key,
+      field: 'count',
+      incr: 1,
+    });
+
+    await this.cache.key.expire({ key, expire: Number(windowSec) });
+    return Number(count || 0);
+  }
+
+  async clearLoginFailures({ email }) {
+    if (!email) {
+      return false;
+    }
+
+    return this.cache.key.delete({
+      key: this._loginFailuresKey(email),
+    });
+  }
+
+  async setLoginLock({ email, lockSec = 900, reason = 'too_many_attempts' }) {
+    if (!email) {
+      return false;
+    }
+
+    const until = new Date(Date.now() + Number(lockSec) * 1000).toISOString();
+    return this.cache.key.set({
+      key: this._loginLockKey(email),
+      data: JSON.stringify({ until, reason }),
+      ttl: Number(lockSec),
+    });
+  }
+
+  async getLoginLock({ email }) {
+    if (!email) {
+      return null;
+    }
+
+    const raw = await this.cache.key.get({
+      key: this._loginLockKey(email),
+    });
+    const lock = this._safeParse(raw);
+    if (!lock || !lock.until) {
+      return null;
+    }
+
+    if (new Date(lock.until).getTime() <= Date.now()) {
+      await this.clearLoginLock({ email });
+      return null;
+    }
+
+    return lock;
+  }
+
+  async clearLoginLock({ email }) {
+    if (!email) {
+      return false;
+    }
+
+    return this.cache.key.delete({
+      key: this._loginLockKey(email),
+    });
+  }
+
+  async recordAuditEvent({
+    actorId = null,
+    action,
+    resourceType = null,
+    resourceId = null,
+    status = 'success',
+    metadata = {},
+  }) {
+    if (!action) {
+      return null;
+    }
+
+    return this.upsertDoc({
+      collection: 'audit_logs',
+      doc: {
+        actorId,
+        action,
+        resourceType,
+        resourceId,
+        status,
+        metadata,
+      },
+    });
+  }
+
+  async createRefreshSession({ tokenId, userId, expiresAt }) {
+    if (!tokenId || !userId || !expiresAt) {
+      return false;
+    }
+
+    const expiryMs = new Date(expiresAt).getTime();
+    if (!Number.isFinite(expiryMs)) {
+      return false;
+    }
+
+    const ttl = Math.max(60, Math.floor((expiryMs - Date.now()) / 1000));
+    return this.cache.key.set({
+      key: this._refreshSessionKey(tokenId),
+      data: JSON.stringify({ tokenId, userId, expiresAt }),
+      ttl,
+    });
+  }
+
+  async getRefreshSession({ tokenId }) {
+    if (!tokenId) {
+      return null;
+    }
+
+    const raw = await this.cache.key.get({
+      key: this._refreshSessionKey(tokenId),
+    });
+    return this._safeParse(raw);
+  }
+
+  async deleteRefreshSession({ tokenId }) {
+    if (!tokenId) {
+      return false;
+    }
+
+    return this.cache.key.delete({
+      key: this._refreshSessionKey(tokenId),
+    });
   }
 };

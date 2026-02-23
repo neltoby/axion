@@ -16,7 +16,8 @@ module.exports = class VirtualStack {
 
     createBolt(args){
         /** inject the prestack at the start */
-        args.stack = this.preStack.concat(args.stack);
+        const merged = this.preStack.concat(args.stack || []);
+        args.stack = merged.filter((mw, index) => merged.indexOf(mw) === index);
         return new Bolt({...{mwsRepo: this.mwsRepo}, ...args});
     }
 

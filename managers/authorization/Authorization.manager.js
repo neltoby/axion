@@ -124,6 +124,26 @@ module.exports = class AuthorizationManager {
     }
   }
 
+  async _recordAudit({ action, status = 'success', metadata = {}, actorId = null }) {
+    if (!this._dataStore()?.recordAuditEvent) {
+      return null;
+    }
+
+    try {
+      return await this._dataStore().recordAuditEvent({
+        actorId,
+        action,
+        resourceType: 'authorization_policy',
+        resourceId: null,
+        status,
+        metadata,
+      });
+    } catch (err) {
+      console.log('authorization audit failure', err?.message || err);
+      return null;
+    }
+  }
+
   async _ensureDefaultPolicySeeded() {
     if (!this._dataStore()) {
       return;
@@ -248,6 +268,16 @@ module.exports = class AuthorizationManager {
     this.policyVersionCache = version;
     this._invalidateCache();
     this._emitPolicyUpdate({ version, role });
+
+    await this._recordAudit({
+      action: 'authorization.set_role_permissions',
+      status: 'success',
+      metadata: {
+        role,
+        permissions: normalizedPermissions,
+        version,
+      },
+    });
 
     return {
       role: roleDoc?.role || role,

@@ -24,6 +24,37 @@ module.exports = class ClassroomsManager {
       'patch=v1_updateClassroom',
       'delete=v1_deleteClassroom',
     ];
+
+    this.restExposed = [
+      {
+        method: 'post',
+        path: '/api/v1/classrooms',
+        fnName: 'v1_createClassroom',
+      },
+      {
+        method: 'get',
+        path: '/api/v1/classrooms',
+        fnName: 'v1_listClassrooms',
+      },
+      {
+        method: 'get',
+        path: '/api/v1/classrooms/:classroomId',
+        fnName: 'v1_getClassroom',
+        queryFromParams: ['classroomId'],
+      },
+      {
+        method: 'patch',
+        path: '/api/v1/classrooms/:classroomId',
+        fnName: 'v1_updateClassroom',
+        bodyFromParams: ['classroomId'],
+      },
+      {
+        method: 'delete',
+        path: '/api/v1/classrooms/:classroomId',
+        fnName: 'v1_deleteClassroom',
+        bodyFromParams: ['classroomId'],
+      },
+    ];
   }
 
   _auth() {
@@ -53,6 +84,33 @@ module.exports = class ClassroomsManager {
 
   async _ensureSchoolExists(schoolId) {
     return this._dataStore().getDoc({ collection: 'schools', id: schoolId });
+  }
+
+  _normalizedKey(value) {
+    if (typeof value !== 'string') {
+      return '';
+    }
+    return normalizeString(value).toLowerCase();
+  }
+
+  async _findClassroomByNameInSchool({ schoolId, name, excludingId = null }) {
+    const normalizedName = this._normalizedKey(name);
+    if (!normalizedName || !schoolId) {
+      return null;
+    }
+
+    const classrooms = await this._dataStore().listDocs({ collection: 'classrooms' });
+    return (
+      classrooms.find((classroom) => {
+        if (!classroom || classroom.schoolId !== schoolId) {
+          return false;
+        }
+        if (excludingId && classroom._id === excludingId) {
+          return false;
+        }
+        return this._normalizedKey(classroom.name) === normalizedName;
+      }) || null
+    );
   }
 
   async v1_createClassroom({ __auth, __authorize, schoolId, name, capacity, resources }) {
@@ -94,11 +152,20 @@ module.exports = class ClassroomsManager {
       return { error: 'school not found' };
     }
 
+    const normalizedName = normalizeString(name);
+    const existingClassroom = await this._findClassroomByNameInSchool({
+      schoolId: targetSchoolId,
+      name: normalizedName,
+    });
+    if (existingClassroom) {
+      return { error: 'classroom name already exists in school' };
+    }
+
     const classroom = await this._dataStore().upsertDoc({
       collection: 'classrooms',
       doc: {
         schoolId: targetSchoolId,
-        name: normalizeString(name),
+        name: normalizedName,
         capacity: Number(capacity),
         resources: Array.isArray(resources) ? resources.map((item) => normalizeString(item)) : [],
         status: STATUS.ACTIVE,
@@ -247,11 +314,23 @@ module.exports = class ClassroomsManager {
       return { errors: [`status must be one of: ${Object.values(STATUS).join(', ')}`] };
     }
 
+    const normalizedName = name !== undefined ? normalizeString(name) : undefined;
+    if (normalizedName !== undefined) {
+      const existingClassroom = await this._findClassroomByNameInSchool({
+        schoolId: classroom.schoolId,
+        name: normalizedName,
+        excludingId: classroom._id,
+      });
+      if (existingClassroom) {
+        return { error: 'classroom name already exists in school' };
+      }
+    }
+
     const updated = await this._dataStore().upsertDoc({
       collection: 'classrooms',
       id: classroom._id,
       doc: {
-        ...(name !== undefined ? { name: normalizeString(name) } : {}),
+        ...(name !== undefined ? { name: normalizedName } : {}),
         ...(capacity !== undefined ? { capacity: Number(capacity) } : {}),
         ...(resources !== undefined
           ? { resources: resources.map((item) => normalizeString(item)) }

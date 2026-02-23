@@ -21,18 +21,74 @@ const ACL_RESOURCES = {
   USER: 'user',
 };
 
+const ROLE_VALUES = new Set(Object.values(ROLES));
+
 module.exports = class AuthManager {
-  constructor({ managers }) {
+  constructor({ managers, config }) {
     this.managers = managers;
+    this.config = config || {};
 
     this.httpExposed = [
       'post=v1_bootstrapSuperadmin',
       'post=v1_login',
+      'post=v1_refreshToken',
+      'post=v1_logout',
       'get=v1_me',
       'post=v1_createSchoolAdmin',
       'get=v1_listUsers',
       'patch=v1_updateUser',
       'delete=v1_deleteUser',
+    ];
+
+    this.restExposed = [
+      {
+        method: 'post',
+        path: '/api/v1/auth/bootstrap-superadmin',
+        fnName: 'v1_bootstrapSuperadmin',
+      },
+      {
+        method: 'post',
+        path: '/api/v1/auth/login',
+        fnName: 'v1_login',
+      },
+      {
+        method: 'post',
+        path: '/api/v1/auth/refresh-token',
+        fnName: 'v1_refreshToken',
+      },
+      {
+        method: 'post',
+        path: '/api/v1/auth/logout',
+        fnName: 'v1_logout',
+      },
+      {
+        method: 'get',
+        path: '/api/v1/auth/me',
+        fnName: 'v1_me',
+      },
+      {
+        method: 'get',
+        path: '/api/v1/users',
+        fnName: 'v1_listUsers',
+      },
+      {
+        method: 'patch',
+        path: '/api/v1/users/:userId',
+        fnName: 'v1_updateUser',
+        bodyFromParams: ['userId'],
+      },
+      {
+        method: 'delete',
+        path: '/api/v1/users/:userId',
+        fnName: 'v1_deleteUser',
+        bodyFromParams: ['userId'],
+      },
+      {
+        method: 'post',
+        path: '/api/v1/schools/:schoolId/admins',
+        fnName: 'v1_createSchoolAdmin',
+        bodyFromParams: ['schoolId'],
+      },
     ];
   }
 
@@ -50,6 +106,123 @@ module.exports = class AuthManager {
 
   _authorization() {
     return this.managers.authorization;
+  }
+
+  _configNumber(key, fallback) {
+    const val = Number(this.config?.dotEnv?.[key] || fallback);
+    return Number.isFinite(val) && val > 0 ? val : fallback;
+  }
+
+  _loginSecurityConfig() {
+    return {
+      maxFailures: this._configNumber('AUTH_LOGIN_MAX_FAILURES', 5),
+      windowSec: this._configNumber('AUTH_LOGIN_WINDOW_SEC', 900),
+      lockSec: this._configNumber('AUTH_LOGIN_LOCK_SEC', 900),
+    };
+  }
+
+  async _recordAudit({ actorId = null, action, resourceType = null, resourceId = null, status = 'success', metadata = {} }) {
+    if (!this._dataStore()?.recordAuditEvent) {
+      return null;
+    }
+
+    try {
+      return await this._dataStore().recordAuditEvent({
+        actorId,
+        action,
+        resourceType,
+        resourceId,
+        status,
+        metadata,
+      });
+    } catch (err) {
+      console.log('audit record failure', err?.message || err);
+      return null;
+    }
+  }
+
+  async _issueTokens({ user }) {
+    const tokenVersion = Number(user?.tokenVersion || 1);
+    const token = this._token().createAccessToken({
+      userId: user._id,
+      role: user.role,
+      schoolId: user.schoolId,
+      email: user.email,
+      tokenVersion,
+    });
+
+    if (!this._token().createRefreshToken || !this._dataStore()?.createRefreshSession) {
+      return { token };
+    }
+
+    const refreshToken = this._token().createRefreshToken({
+      userId: user._id,
+      role: user.role,
+      schoolId: user.schoolId,
+      email: user.email,
+      tokenVersion,
+    });
+
+    const refreshMeta = this._token().getTokenMeta({ token: refreshToken });
+    if (refreshMeta?.jti && refreshMeta?.exp) {
+      await this._dataStore().createRefreshSession({
+        tokenId: refreshMeta.jti,
+        userId: user._id,
+        expiresAt: new Date(refreshMeta.exp * 1000).toISOString(),
+      });
+    }
+
+    return {
+      token,
+      refreshToken,
+    };
+  }
+
+  async _registerLoginFailure({ email, ip, reason }) {
+    const security = this._loginSecurityConfig();
+    let count = 0;
+    if (this._dataStore()?.registerLoginFailure) {
+      count = await this._dataStore().registerLoginFailure({
+        email,
+        windowSec: security.windowSec,
+      });
+    }
+
+    let locked = false;
+    if (count >= security.maxFailures && this._dataStore()?.setLoginLock) {
+      await this._dataStore().setLoginLock({
+        email,
+        lockSec: security.lockSec,
+        reason: reason || 'too_many_attempts',
+      });
+      locked = true;
+    }
+
+    await this._recordAudit({
+      actorId: null,
+      action: 'auth.login.failure',
+      resourceType: 'user',
+      resourceId: email,
+      status: 'failure',
+      metadata: {
+        ip,
+        reason,
+        attempts: count,
+        locked,
+      },
+    });
+
+    return { count, locked };
+  }
+
+  async _clearLoginGuards({ email }) {
+    if (this._dataStore()?.clearLoginFailures) {
+      await this._dataStore().clearLoginFailures({ email });
+    }
+
+    if (this._dataStore()?.clearLoginLock) {
+      await this._dataStore().clearLoginLock({ email });
+    }
   }
 
   _sanitizeUser(user) {
@@ -187,25 +360,32 @@ module.exports = class AuthManager {
         role: ROLES.SUPERADMIN,
         schoolId: null,
         status: STATUS.ACTIVE,
+        tokenVersion: 1,
       },
     });
 
     await this._dataStore().setUserEmailIndex({ email: normalizedEmail, userId: user._id });
 
-    const token = this._token().createAccessToken({
-      userId: user._id,
-      role: user.role,
-      schoolId: user.schoolId,
-      email: user.email,
+    const tokens = await this._issueTokens({ user });
+
+    await this._recordAudit({
+      actorId: user._id,
+      action: 'auth.bootstrap_superadmin',
+      resourceType: 'user',
+      resourceId: user._id,
+      status: 'success',
+      metadata: {
+        email: user.email,
+      },
     });
 
     return {
-      token,
+      ...tokens,
       user: this._sanitizeUser(user),
     };
   }
 
-  async v1_login({ email, password }) {
+  async v1_login({ __device, email, password }) {
     const errors = compactErrors([
       ensureEmail({ value: email }),
       ensureString({ value: password, field: 'password', min: 1, max: 128 }),
@@ -215,12 +395,47 @@ module.exports = class AuthManager {
       return { errors };
     }
 
-    const user = await this._findUserByEmail(lower(email));
+    const normalizedEmail = lower(email);
+    const ip = __device?.ip || 'N/A';
+
+    if (this._dataStore()?.getLoginLock) {
+      const lock = await this._dataStore().getLoginLock({ email: normalizedEmail });
+      if (lock) {
+        await this._recordAudit({
+          actorId: null,
+          action: 'auth.login.locked',
+          resourceType: 'user',
+          resourceId: normalizedEmail,
+          status: 'failure',
+          metadata: { ip, until: lock.until },
+        });
+
+        return {
+          error: 'account temporarily locked. try again later',
+          code: 423,
+        };
+      }
+    }
+
+    const user = await this._findUserByEmail(normalizedEmail);
     if (!user) {
+      await this._registerLoginFailure({
+        email: normalizedEmail,
+        ip,
+        reason: 'user_not_found',
+      });
       return { error: 'invalid credentials' };
     }
 
     if (user.status !== STATUS.ACTIVE) {
+      await this._recordAudit({
+        actorId: user._id,
+        action: 'auth.login.inactive',
+        resourceType: 'user',
+        resourceId: user._id,
+        status: 'failure',
+        metadata: { ip },
+      });
       return { error: 'account is inactive' };
     }
 
@@ -229,19 +444,132 @@ module.exports = class AuthManager {
       hash: user.passwordHash,
     });
     if (!ok) {
+      const failState = await this._registerLoginFailure({
+        email: normalizedEmail,
+        ip,
+        reason: 'invalid_password',
+      });
+
+      if (failState.locked) {
+        return {
+          error: 'account temporarily locked. try again later',
+          code: 423,
+        };
+      }
+
       return { error: 'invalid credentials' };
     }
 
-    const token = this._token().createAccessToken({
-      userId: user._id,
-      role: user.role,
-      schoolId: user.schoolId,
-      email: user.email,
+    await this._clearLoginGuards({ email: normalizedEmail });
+    const tokens = await this._issueTokens({ user });
+
+    await this._recordAudit({
+      actorId: user._id,
+      action: 'auth.login.success',
+      resourceType: 'user',
+      resourceId: user._id,
+      status: 'success',
+      metadata: { ip },
     });
 
     return {
-      token,
+      ...tokens,
       user: this._sanitizeUser(user),
+    };
+  }
+
+  async v1_refreshToken({ refreshToken }) {
+    const errors = compactErrors([
+      ensureString({ value: refreshToken, field: 'refreshToken', min: 20, max: 4000 }),
+    ]);
+    if (errors.length > 0) {
+      return { errors };
+    }
+
+    if (!this._token().verifyRefreshToken) {
+      return { error: 'refresh token is not configured', code: 501 };
+    }
+
+    const decoded = this._token().verifyRefreshToken({ token: refreshToken });
+    if (!decoded || decoded.tokenType !== 'refresh' || !decoded.jti || !decoded.userId) {
+      return { error: 'unauthorized' };
+    }
+
+    if (!this._dataStore()?.getRefreshSession || !this._dataStore()?.deleteRefreshSession) {
+      return { error: 'refresh token storage unavailable', code: 500 };
+    }
+
+    const session = await this._dataStore().getRefreshSession({ tokenId: decoded.jti });
+    if (!session || session.userId !== decoded.userId) {
+      return { error: 'unauthorized' };
+    }
+
+    const user = await this._findUserById(decoded.userId);
+    if (!user || user.status !== STATUS.ACTIVE) {
+      return { error: 'unauthorized' };
+    }
+
+    if (decoded.tokenVersion !== undefined && Number(decoded.tokenVersion) !== Number(user.tokenVersion || 1)) {
+      return { error: 'unauthorized' };
+    }
+
+    await this._dataStore().deleteRefreshSession({ tokenId: decoded.jti });
+    const tokens = await this._issueTokens({ user });
+
+    await this._recordAudit({
+      actorId: user._id,
+      action: 'auth.refresh.success',
+      resourceType: 'user',
+      resourceId: user._id,
+      status: 'success',
+      metadata: {},
+    });
+
+    return {
+      ...tokens,
+      user: this._sanitizeUser(user),
+    };
+  }
+
+  async v1_logout({ __auth, refreshToken }) {
+    if (!__auth || !__auth.userId) {
+      return { error: 'unauthorized' };
+    }
+
+    if (__auth.jti && this._dataStore()?.revokeAccessToken) {
+      const ttlSec = this._token().computeRevocationTtlSec
+        ? this._token().computeRevocationTtlSec({ exp: __auth.exp })
+        : undefined;
+
+      await this._dataStore().revokeAccessToken({
+        jti: __auth.jti,
+        expiresAtSec: __auth.exp,
+        ttlSec,
+      });
+    }
+
+    if (
+      refreshToken &&
+      this._token().verifyRefreshToken &&
+      this._dataStore()?.deleteRefreshSession
+    ) {
+      const decodedRefresh = this._token().verifyRefreshToken({ token: refreshToken });
+      if (decodedRefresh?.jti) {
+        await this._dataStore().deleteRefreshSession({ tokenId: decodedRefresh.jti });
+      }
+    }
+
+    await this._recordAudit({
+      actorId: __auth.userId,
+      action: 'auth.logout',
+      resourceType: 'user',
+      resourceId: __auth.userId,
+      status: 'success',
+      metadata: {},
+    });
+
+    return {
+      logout: true,
     };
   }
 
@@ -294,10 +622,20 @@ module.exports = class AuthManager {
         role: ROLES.SCHOOL_ADMIN,
         schoolId,
         status: STATUS.ACTIVE,
+        tokenVersion: 1,
       },
     });
 
     await this._dataStore().setUserEmailIndex({ email: normalizedEmail, userId: user._id });
+
+    await this._recordAudit({
+      actorId: gate.actor._id,
+      action: 'user.create_school_admin',
+      resourceType: 'user',
+      resourceId: user._id,
+      status: 'success',
+      metadata: { schoolId },
+    });
 
     return {
       user: this._sanitizeUser(user),
@@ -322,6 +660,10 @@ module.exports = class AuthManager {
 
       if (roleErr) {
         return { errors: [roleErr] };
+      }
+
+      if (!ROLE_VALUES.has(roleFilter)) {
+        return { errors: [`role must be one of: ${Array.from(ROLE_VALUES).join(', ')}`] };
       }
     }
 
@@ -427,8 +769,11 @@ module.exports = class AuthManager {
       }
     }
 
+    let rotateTokenVersion = false;
+
     if (password !== undefined) {
       updateDoc.passwordHash = await this._password().hash({ plain: password });
+      rotateTokenVersion = true;
     }
 
     if (firstName !== undefined) {
@@ -441,10 +786,15 @@ module.exports = class AuthManager {
 
     if (status !== undefined) {
       updateDoc.status = status;
+      rotateTokenVersion = true;
     }
 
     if (schoolId !== undefined) {
       updateDoc.schoolId = normalizeString(schoolId);
+    }
+
+    if (rotateTokenVersion) {
+      updateDoc.tokenVersion = Number(targetUser.tokenVersion || 1) + 1;
     }
 
     if (Object.keys(updateDoc).length === 0) {
@@ -466,6 +816,17 @@ module.exports = class AuthManager {
         userId: updatedUser._id,
       });
     }
+
+    await this._recordAudit({
+      actorId: gate.actor._id,
+      action: 'user.update',
+      resourceType: 'user',
+      resourceId: updatedUser._id,
+      status: 'success',
+      metadata: {
+        fields: Object.keys(updateDoc),
+      },
+    });
 
     return {
       user: this._sanitizeUser(updatedUser),
@@ -500,7 +861,19 @@ module.exports = class AuthManager {
     await this._dataStore().deleteDoc({ collection: 'users', id: userId });
     if (targetUser.email) {
       await this._dataStore().clearUserEmailIndex({ email: targetUser.email });
+      await this._clearLoginGuards({ email: targetUser.email });
     }
+
+    await this._recordAudit({
+      actorId: actor._id,
+      action: 'user.delete',
+      resourceType: 'user',
+      resourceId: userId,
+      status: 'success',
+      metadata: {
+        role: targetUser.role,
+      },
+    });
 
     return {
       deleted: {

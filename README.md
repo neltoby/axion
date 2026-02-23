@@ -333,7 +333,7 @@ Example forbidden response:
 - `403`: forbidden (RBAC scope violation).
 - `404`: resource not found.
 - `405`: method not allowed for target module/function.
-- `409`: conflict (e.g., email already in use, duplicate school code).
+- `409`: conflict (e.g., email already in use, duplicate school code/name, duplicate classroom name in school).
 - `429`: too many requests.
 
 ## Test Cases and Results
@@ -350,7 +350,7 @@ Current suite:
 - permission/scope checks (`superadmin` vs `school_admin`)
 - middleware and status-code mapping checks
 - auth admin-user management checks (create/list/update/delete guardrails)
-- latest local run: `37` passed, `0` failed
+- latest local run: `57` passed, `0` failed
 
 ## Deployment Instructions
 
@@ -373,4 +373,6 @@ Current suite:
 - This implementation keeps Axion’s dynamic module/function routing pattern.
 - Persistence uses Redis documents and sets (instead of MongoDB).
 - `school_admin` is scoped to a single `schoolId`.
-- Student email uniqueness is enforced per school.
+- School name and school code uniqueness are enforced globally.
+- Classroom name uniqueness is enforced per school.
+- Student email uniqueness is enforced per school (including transfer validation).

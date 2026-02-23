@@ -16,6 +16,37 @@ module.exports = class SchoolsManager {
       'patch=v1_updateSchool',
       'delete=v1_deleteSchool',
     ];
+
+    this.restExposed = [
+      {
+        method: 'post',
+        path: '/api/v1/schools',
+        fnName: 'v1_createSchool',
+      },
+      {
+        method: 'get',
+        path: '/api/v1/schools',
+        fnName: 'v1_listSchools',
+      },
+      {
+        method: 'get',
+        path: '/api/v1/schools/:schoolId',
+        fnName: 'v1_getSchool',
+        queryFromParams: ['schoolId'],
+      },
+      {
+        method: 'patch',
+        path: '/api/v1/schools/:schoolId',
+        fnName: 'v1_updateSchool',
+        bodyFromParams: ['schoolId'],
+      },
+      {
+        method: 'delete',
+        path: '/api/v1/schools/:schoolId',
+        fnName: 'v1_deleteSchool',
+        bodyFromParams: ['schoolId'],
+      },
+    ];
   }
 
   _auth() {
@@ -24,6 +55,26 @@ module.exports = class SchoolsManager {
 
   _dataStore() {
     return this.managers.dataStore;
+  }
+
+  async _recordAudit({ actorId = null, action, resourceId = null, status = 'success', metadata = {} }) {
+    if (!this._dataStore()?.recordAuditEvent) {
+      return null;
+    }
+
+    try {
+      return await this._dataStore().recordAuditEvent({
+        actorId,
+        action,
+        resourceType: 'school',
+        resourceId,
+        status,
+        metadata,
+      });
+    } catch (err) {
+      console.log('audit record failure', err?.message || err);
+      return null;
+    }
   }
 
   _sanitizeSchool(school) {
@@ -47,6 +98,33 @@ module.exports = class SchoolsManager {
     return Array.from(new Set((items || []).filter(Boolean)));
   }
 
+  _normalizedKey(value) {
+    if (typeof value !== 'string') {
+      return '';
+    }
+    return normalizeString(value).toLowerCase();
+  }
+
+  async _findSchoolByField({ field, value, excludingId = null }) {
+    const normalizedValue = this._normalizedKey(value);
+    if (!normalizedValue) {
+      return null;
+    }
+
+    const schools = await this._dataStore().listDocs({ collection: 'schools' });
+    return (
+      schools.find((school) => {
+        if (!school) {
+          return false;
+        }
+        if (excludingId && school._id === excludingId) {
+          return false;
+        }
+        return this._normalizedKey(school[field]) === normalizedValue;
+      }) || null
+    );
+  }
+
   async v1_createSchool({ __auth, __authorize, name, code, address, description }) {
     const gate = await this._auth().ensureSuperadmin({ __auth });
     if (gate.error) {
@@ -64,24 +142,42 @@ module.exports = class SchoolsManager {
       return { errors };
     }
 
-    const allSchools = await this._dataStore().listDocs({ collection: 'schools' });
-    const exists = allSchools.find(
-      (school) => (school.code || '').toLowerCase() === normalizeString(code).toLowerCase()
-    );
+    const normalizedName = normalizeString(name);
+    const normalizedCode = normalizeString(code);
 
-    if (exists) {
+    const existingByCode = await this._findSchoolByField({
+      field: 'code',
+      value: normalizedCode,
+    });
+    if (existingByCode) {
       return { error: 'school code already exists' };
+    }
+
+    const existingByName = await this._findSchoolByField({
+      field: 'name',
+      value: normalizedName,
+    });
+    if (existingByName) {
+      return { error: 'school name already exists' };
     }
 
     const school = await this._dataStore().upsertDoc({
       collection: 'schools',
       doc: {
-        name: normalizeString(name),
-        code: normalizeString(code),
+        name: normalizedName,
+        code: normalizedCode,
         address: normalizeString(address),
         description: description ? normalizeString(description) : '',
         status: STATUS.ACTIVE,
       },
+    });
+
+    await this._recordAudit({
+      actorId: gate.actor._id,
+      action: 'school.create',
+      resourceId: school._id,
+      status: 'success',
+      metadata: { code: school.code },
     });
 
     return {
@@ -157,14 +253,42 @@ module.exports = class SchoolsManager {
       return { errors: [`status must be one of: ${Object.values(STATUS).join(', ')}`] };
     }
 
+    const normalizedName = name !== undefined ? normalizeString(name) : undefined;
+    if (normalizedName !== undefined) {
+      const existingByName = await this._findSchoolByField({
+        field: 'name',
+        value: normalizedName,
+        excludingId: school._id,
+      });
+      if (existingByName) {
+        return { error: 'school name already exists' };
+      }
+    }
+
     const updated = await this._dataStore().upsertDoc({
       collection: 'schools',
       id: targetSchoolId,
       doc: {
-        ...(name !== undefined ? { name: normalizeString(name) } : {}),
+        ...(name !== undefined ? { name: normalizedName } : {}),
         ...(address !== undefined ? { address: normalizeString(address) } : {}),
         ...(description !== undefined ? { description: normalizeString(description) } : {}),
         ...(status !== undefined ? { status } : {}),
+      },
+    });
+
+    await this._recordAudit({
+      actorId: gate.actor._id,
+      action: 'school.update',
+      resourceId: updated._id,
+      status: 'success',
+      metadata: {
+        fields: ['name', 'address', 'description', 'status'].filter((field) => {
+          if (field === 'name') return name !== undefined;
+          if (field === 'address') return address !== undefined;
+          if (field === 'description') return description !== undefined;
+          if (field === 'status') return status !== undefined;
+          return false;
+        }),
       },
     });
 
@@ -198,6 +322,10 @@ module.exports = class SchoolsManager {
       this._dataStore().listDocs({ collection: 'users' }),
     ]);
 
+    const classroomById = new Map(allClassrooms.map((doc) => [doc._id, doc]));
+    const studentById = new Map(allStudents.map((doc) => [doc._id, doc]));
+    const userById = new Map(allUsers.map((doc) => [doc._id, doc]));
+
     const classroomIds = this._uniqueIds(
       indexedClassroomIds.concat(
         allClassrooms
@@ -220,35 +348,145 @@ module.exports = class SchoolsManager {
         .map((user) => user._id)
     );
 
-    await Promise.all(
-      classroomIds.map(async (id) => {
-        await this._dataStore().deleteDoc({ collection: 'classrooms', id });
-        if (this._dataStore().removeClassroomFromSchool) {
-          await this._dataStore().removeClassroomFromSchool({ schoolId, classroomId: id });
-        }
-      })
-    );
+    const rollbackOps = [];
+    const runStep = async ({ execute, rollback }) => {
+      await execute();
+      rollbackOps.push(rollback);
+    };
 
-    await Promise.all(
-      studentIds.map(async (id) => {
-        await this._dataStore().deleteDoc({ collection: 'students', id });
-        if (this._dataStore().removeStudentFromSchool) {
-          await this._dataStore().removeStudentFromSchool({ schoolId, studentId: id });
-        }
-      })
-    );
+    try {
+      for (const id of classroomIds) {
+        const classroomDoc = classroomById.get(id) || null;
 
-    await Promise.all(
-      userIds.map(async (id) => {
-        const user = allUsers.find((item) => item._id === id);
-        await this._dataStore().deleteDoc({ collection: 'users', id });
-        if (user?.email && this._dataStore().clearUserEmailIndex) {
-          await this._dataStore().clearUserEmailIndex({ email: user.email });
-        }
-      })
-    );
+        await runStep({
+          execute: async () => {
+            await this._dataStore().deleteDoc({ collection: 'classrooms', id });
+            if (this._dataStore().removeClassroomFromSchool) {
+              await this._dataStore().removeClassroomFromSchool({ schoolId, classroomId: id });
+            }
+          },
+          rollback: async () => {
+            if (classroomDoc) {
+              await this._dataStore().upsertDoc({
+                collection: 'classrooms',
+                id,
+                doc: classroomDoc,
+              });
+              if (this._dataStore().addClassroomToSchool) {
+                await this._dataStore().addClassroomToSchool({ schoolId, classroomId: id });
+              }
+            }
+          },
+        });
+      }
 
-    await this._dataStore().deleteDoc({ collection: 'schools', id: schoolId });
+      for (const id of studentIds) {
+        const studentDoc = studentById.get(id) || null;
+
+        await runStep({
+          execute: async () => {
+            await this._dataStore().deleteDoc({ collection: 'students', id });
+            if (this._dataStore().removeStudentFromSchool) {
+              await this._dataStore().removeStudentFromSchool({ schoolId, studentId: id });
+            }
+          },
+          rollback: async () => {
+            if (studentDoc) {
+              await this._dataStore().upsertDoc({
+                collection: 'students',
+                id,
+                doc: studentDoc,
+              });
+              if (this._dataStore().addStudentToSchool) {
+                await this._dataStore().addStudentToSchool({ schoolId, studentId: id });
+              }
+            }
+          },
+        });
+      }
+
+      for (const id of userIds) {
+        const userDoc = userById.get(id) || null;
+
+        await runStep({
+          execute: async () => {
+            await this._dataStore().deleteDoc({ collection: 'users', id });
+            if (userDoc?.email && this._dataStore().clearUserEmailIndex) {
+              await this._dataStore().clearUserEmailIndex({ email: userDoc.email });
+            }
+            if (userDoc?.email && this._dataStore().clearLoginFailures) {
+              await this._dataStore().clearLoginFailures({ email: userDoc.email });
+            }
+            if (userDoc?.email && this._dataStore().clearLoginLock) {
+              await this._dataStore().clearLoginLock({ email: userDoc.email });
+            }
+          },
+          rollback: async () => {
+            if (userDoc) {
+              await this._dataStore().upsertDoc({
+                collection: 'users',
+                id,
+                doc: userDoc,
+              });
+              if (userDoc.email && this._dataStore().setUserEmailIndex) {
+                await this._dataStore().setUserEmailIndex({
+                  email: userDoc.email,
+                  userId: id,
+                });
+              }
+            }
+          },
+        });
+      }
+
+      await runStep({
+        execute: async () => {
+          await this._dataStore().deleteDoc({ collection: 'schools', id: schoolId });
+        },
+        rollback: async () => {
+          await this._dataStore().upsertDoc({
+            collection: 'schools',
+            id: schoolId,
+            doc: school,
+          });
+        },
+      });
+    } catch (err) {
+      for (let i = rollbackOps.length - 1; i >= 0; i -= 1) {
+        try {
+          await rollbackOps[i]();
+        } catch (rollbackErr) {
+          console.log('school delete rollback failure', rollbackErr?.message || rollbackErr);
+        }
+      }
+
+      await this._recordAudit({
+        actorId: gate.actor._id,
+        action: 'school.delete',
+        resourceId: schoolId,
+        status: 'failure',
+        metadata: {
+          error: err?.message || String(err),
+        },
+      });
+
+      return {
+        error: 'failed to delete school atomically',
+        code: 500,
+      };
+    }
+
+    await this._recordAudit({
+      actorId: gate.actor._id,
+      action: 'school.delete',
+      resourceId: schoolId,
+      status: 'success',
+      metadata: {
+        classrooms: classroomIds.length,
+        students: studentIds.length,
+        users: userIds.length,
+      },
+    });
 
     return {
       deleted: {

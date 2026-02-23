@@ -17,9 +17,21 @@ const CACHE_PREFIX                     = process.env.CACHE_PREFIX || `${SERVICE_
 const config                           = require(`./envs/${ENV}.js`);
 const SHORT_TOKEN_SECRET               = process.env.SHORT_TOKEN_SECRET || null;
 const ACCESS_TOKEN_EXPIRES_IN          = process.env.ACCESS_TOKEN_EXPIRES_IN || '12h';
+const ACCESS_TOKEN_KEYS                = process.env.ACCESS_TOKEN_KEYS || '';
+const ACCESS_TOKEN_ACTIVE_KID          = process.env.ACCESS_TOKEN_ACTIVE_KID || '';
 const PASSWORD_SALT_ROUNDS             = process.env.PASSWORD_SALT_ROUNDS || '10';
 const API_RATE_LIMIT_MAX               = process.env.API_RATE_LIMIT_MAX || '120';
 const API_RATE_LIMIT_WINDOW_SEC        = process.env.API_RATE_LIMIT_WINDOW_SEC || '60';
+const RATE_LIMIT_FAIL_OPEN             = process.env.RATE_LIMIT_FAIL_OPEN || 'false';
+const AUTH_LOGIN_MAX_FAILURES          = process.env.AUTH_LOGIN_MAX_FAILURES || '5';
+const AUTH_LOGIN_WINDOW_SEC            = process.env.AUTH_LOGIN_WINDOW_SEC || '900';
+const AUTH_LOGIN_LOCK_SEC              = process.env.AUTH_LOGIN_LOCK_SEC || '900';
+const TOKEN_REVOKE_TTL_SEC             = process.env.TOKEN_REVOKE_TTL_SEC || '604800';
+const CORS_ORIGINS                     = process.env.CORS_ORIGINS || '';
+const CORS_ALLOW_ALL                   = process.env.CORS_ALLOW_ALL || 'false';
+const ENABLE_DYNAMIC_API               = process.env.ENABLE_DYNAMIC_API || 'false';
+const REQUEST_MAX_DEPTH                = process.env.REQUEST_MAX_DEPTH || '8';
+const REQUEST_MAX_KEYS                 = process.env.REQUEST_MAX_KEYS || '2000';
 
 const dotEnv = {
     SERVICE_NAME,
@@ -32,9 +44,21 @@ const dotEnv = {
     USER_PORT,
     SHORT_TOKEN_SECRET,
     ACCESS_TOKEN_EXPIRES_IN,
+    ACCESS_TOKEN_KEYS,
+    ACCESS_TOKEN_ACTIVE_KID,
     PASSWORD_SALT_ROUNDS,
     API_RATE_LIMIT_MAX,
     API_RATE_LIMIT_WINDOW_SEC,
+    RATE_LIMIT_FAIL_OPEN,
+    AUTH_LOGIN_MAX_FAILURES,
+    AUTH_LOGIN_WINDOW_SEC,
+    AUTH_LOGIN_LOCK_SEC,
+    TOKEN_REVOKE_TTL_SEC,
+    CORS_ORIGINS,
+    CORS_ALLOW_ALL,
+    ENABLE_DYNAMIC_API,
+    REQUEST_MAX_DEPTH,
+    REQUEST_MAX_KEYS,
 };
 
 const REQUIRED_ENV_KEYS = [
@@ -46,6 +70,18 @@ const NUMERIC_ENV_RULES = [
     { key: 'PASSWORD_SALT_ROUNDS', min: 1 },
     { key: 'API_RATE_LIMIT_MAX', min: 1 },
     { key: 'API_RATE_LIMIT_WINDOW_SEC', min: 1 },
+    { key: 'AUTH_LOGIN_MAX_FAILURES', min: 1 },
+    { key: 'AUTH_LOGIN_WINDOW_SEC', min: 1 },
+    { key: 'AUTH_LOGIN_LOCK_SEC', min: 1 },
+    { key: 'TOKEN_REVOKE_TTL_SEC', min: 1 },
+    { key: 'REQUEST_MAX_DEPTH', min: 1 },
+    { key: 'REQUEST_MAX_KEYS', min: 1 },
+];
+
+const BOOLEAN_ENV_KEYS = [
+    'RATE_LIMIT_FAIL_OPEN',
+    'CORS_ALLOW_ALL',
+    'ENABLE_DYNAMIC_API',
 ];
 
 const ensureDotEnvReady = ({ dotEnv }) => {
@@ -65,6 +101,21 @@ const ensureDotEnvReady = ({ dotEnv }) => {
 
     if (invalidNumeric.length > 0) {
         throw Error(`invalid numeric env variables: ${invalidNumeric.join(', ')}`);
+    }
+
+    const invalidBoolean = BOOLEAN_ENV_KEYS.filter((key) => {
+        const value = String(dotEnv[key]).trim().toLowerCase();
+        return value !== 'true' && value !== 'false';
+    });
+
+    if (invalidBoolean.length > 0) {
+        throw Error(`invalid boolean env variables (use true|false): ${invalidBoolean.join(', ')}`);
+    }
+
+    const corsAllowAll = String(dotEnv.CORS_ALLOW_ALL).trim().toLowerCase() === 'true';
+    const hasCorsOrigins = String(dotEnv.CORS_ORIGINS || '').trim().length > 0;
+    if (String(dotEnv.ENV).toLowerCase() === 'production' && !corsAllowAll && !hasCorsOrigins) {
+        throw Error('CORS_ORIGINS must be set in production when CORS_ALLOW_ALL=false');
     }
 };
 
