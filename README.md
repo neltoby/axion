@@ -22,6 +22,11 @@ This repository implements the backend technical challenge on top of the Axion m
 - Added health payload tests and dependency-down behavior (`503` when cache check fails).
 - Removed unused legacy files/dependencies to keep the codebase leaner.
 
+## Current Assumptions
+
+- For current cross-device testing, CORS is intentionally open in all environments by default (`CORS_ALLOW_ALL=true`) so testers can call the API from any device/browser origin.
+- This is a temporary testing assumption and should be tightened to allowlisted origins before real production rollout.
+
 ## High-Level Architecture
 
 ```mermaid
@@ -215,7 +220,7 @@ Core variables:
 - `AUTH_LOGIN_WINDOW_SEC` (default: `900`)
 - `AUTH_LOGIN_LOCK_SEC` (default: `900`)
 - `CORS_ORIGINS` (comma-separated origins)
-- `CORS_ALLOW_ALL` (`true|false`, default `false`)
+- `CORS_ALLOW_ALL` (`true|false`, default: `true`)
 - `ENABLE_DYNAMIC_API` (`true|false`, default `false`)
 - `REQUEST_MAX_DEPTH` (default: `8`)
 - `REQUEST_MAX_KEYS` (default: `2000`)
@@ -499,4 +504,4 @@ Latest local run: `59 passed, 0 failed`.
    - `npm run start`
 4. Put behind a reverse proxy/load balancer in production.
 5. Configure platform/container probes to use either `GET /health` or `GET /healthz`.
-6. Ensure `CORS_ORIGINS` is set for production unless intentionally using `CORS_ALLOW_ALL=true`.
+6. Current testing default is `CORS_ALLOW_ALL=true` in all environments; if you switch it to `false` in production, set `CORS_ORIGINS` explicitly.
