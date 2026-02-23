@@ -29,11 +29,11 @@ This repository implements the backend technical challenge on top of the Axion m
 
 ## Active Deployment
 
-- Live base URL: `https://axionbackend-qf9vabjn.b4a.run`
+- Live base URL: `https://axion-6fhxwg.fly.dev`
 - Health checks:
-  - `GET https://axionbackend-qf9vabjn.b4a.run/health`
-  - `GET https://axionbackend-qf9vabjn.b4a.run/healthz`
-- For Postman, set `baseUrl` to `https://axionbackend-qf9vabjn.b4a.run` and call endpoints like `{{baseUrl}}/api/v1/auth/login`.
+  - `GET https://axion-6fhxwg.fly.dev/health`
+  - `GET https://axion-6fhxwg.fly.dev/healthz`
+- For Postman, set `baseUrl` to `https://axion-6fhxwg.fly.dev` and call endpoints like `{{baseUrl}}/api/v1/auth/login`.
 
 ## High-Level Architecture
 
@@ -283,7 +283,7 @@ Health probes:
 Base URLs:
 
 - local: `http://localhost:5111`
-- deployed: `https://axionbackend-qf9vabjn.b4a.run`
+- deployed: `https://axion-6fhxwg.fly.dev`
 
 Health routes:
 
@@ -345,7 +345,7 @@ Auth header options:
 Example against deployed environment:
 
 ```bash
-curl -X GET "https://axionbackend-qf9vabjn.b4a.run/health"
+curl -X GET "https://axion-6fhxwg.fly.dev/health"
 ```
 
 ### Health
@@ -518,7 +518,7 @@ Latest local run: `59 passed, 0 failed`.
 
 ## Deployment Notes
 
-Live deployment URL: `https://axionbackend-qf9vabjn.b4a.run`
+Live deployment URL: `https://axion-6fhxwg.fly.dev`
 
 1. Provision Redis.
 2. Configure `.env` from `.env.example`.
