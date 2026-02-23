@@ -33,6 +33,16 @@ const layers = {
                 _default: {inherit: true},
             }
         }
+    },
+
+    school: {
+        _default: { anyoneCan: 'none' },
+        classroom: {
+            _default: { inherit: true },
+        },
+        student: {
+            _default: { inherit: true },
+        },
     }
 }
 
