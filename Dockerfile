@@ -21,5 +21,5 @@ COPY . .
 RUN chown -R node:node /app
 USER node
 
-EXPOSE 5111
+EXPOSE 8080
 CMD ["npm", "start"]

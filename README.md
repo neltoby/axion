@@ -27,6 +27,14 @@ This repository implements the backend technical challenge on top of the Axion m
 - For current cross-device testing, CORS is intentionally open in all environments by default (`CORS_ALLOW_ALL=true`) so testers can call the API from any device/browser origin.
 - This is a temporary testing assumption and should be tightened to allowlisted origins before real production rollout.
 
+## Active Deployment
+
+- Live base URL: `https://axionbackend-qf9vabjn.b4a.run`
+- Health checks:
+  - `GET https://axionbackend-qf9vabjn.b4a.run/health`
+  - `GET https://axionbackend-qf9vabjn.b4a.run/healthz`
+- For Postman, set `baseUrl` to `https://axionbackend-qf9vabjn.b4a.run` and call endpoints like `{{baseUrl}}/api/v1/auth/login`.
+
 ## High-Level Architecture
 
 ```mermaid
@@ -270,6 +278,11 @@ Health probes:
 
 ## Routing Model
 
+Base URLs:
+
+- local: `http://localhost:5111`
+- deployed: `https://axionbackend-qf9vabjn.b4a.run`
+
 Health routes:
 
 - `GET /health`
@@ -326,6 +339,12 @@ Auth header options:
 
 - `Authorization: Bearer <token>`
 - `token: <token>`
+
+Example against deployed environment:
+
+```bash
+curl -X GET "https://axionbackend-qf9vabjn.b4a.run/health"
+```
 
 ### Health
 
@@ -496,6 +515,8 @@ Current test files include:
 Latest local run: `59 passed, 0 failed`.
 
 ## Deployment Notes
+
+Live deployment URL: `https://axionbackend-qf9vabjn.b4a.run`
 
 1. Provision Redis.
 2. Configure `.env` from `.env.example`.
