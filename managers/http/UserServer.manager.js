@@ -1,4 +1,3 @@
-const http = require('http');
 const express = require('express');
 const cors = require('cors');
 const app = express();
@@ -483,10 +482,12 @@ module.exports = class UserServer {
 			});
 		});
 
-		let server = http.createServer(app);
-		app.listen(this.config.dotEnv.USER_PORT, () => {
+		const port = Number(this.config.dotEnv.USER_PORT);
+		const host = this.config.dotEnv.USER_HOST || '0.0.0.0';
+
+		app.listen(port, host, () => {
 			console.log(
-				`${this.config.dotEnv.SERVICE_NAME.toUpperCase()} is running on port: ${this.config.dotEnv.USER_PORT}`,
+				`${this.config.dotEnv.SERVICE_NAME.toUpperCase()} is running on ${host}:${port}`,
 			);
 		});
 	}

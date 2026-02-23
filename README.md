@@ -211,7 +211,8 @@ Core variables:
 
 - `SERVICE_NAME` (default: `axion`)
 - `ENV` (`development` or `production`)
-- `USER_PORT` (default: `5111`)
+- `USER_PORT` (default: `5111`; overridden by platform `PORT` when present)
+- `USER_HOST` (default: `0.0.0.0`)
 - `REDIS_URI` (base redis URI used by defaults)
 - `CACHE_REDIS`, `CACHE_PREFIX`
 - `CORTEX_REDIS`, `CORTEX_PREFIX`, `CORTEX_TYPE`
@@ -256,6 +257,7 @@ npm test         # node --test tests/**/*.test.js
 ```
 
 Default server port: `5111`.
+Runtime bind host defaults to `0.0.0.0`.
 
 ## Docker (Node 22)
 

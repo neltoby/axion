@@ -3,7 +3,8 @@ require('dotenv').config()
 const pjson                            = require('../package.json');
 const utils                            = require('../libs/utils');
 const SERVICE_NAME                     = (process.env.SERVICE_NAME)? utils.slugify(process.env.SERVICE_NAME):pjson.name;
-const USER_PORT                        = process.env.USER_PORT || 5111;
+const USER_PORT                        = process.env.PORT || process.env.USER_PORT || 5111;
+const USER_HOST                        = process.env.USER_HOST || '0.0.0.0';
 const ENV                              = process.env.ENV || "development";
 const REDIS_URI                        = process.env.REDIS_URI || "redis://127.0.0.1:6379";
 
@@ -42,6 +43,7 @@ const dotEnv = {
     CACHE_REDIS,
     CACHE_PREFIX,
     USER_PORT,
+    USER_HOST,
     SHORT_TOKEN_SECRET,
     ACCESS_TOKEN_EXPIRES_IN,
     ACCESS_TOKEN_KEYS,
